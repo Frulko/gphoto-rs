@@ -1,8 +1,11 @@
 use std::ffi::{CString};
-use std::mem;
+use std::ops::Deref;
+use std::{mem, slice};
 use std::path::Path;
 
 use std::os::unix::prelude::*;
+
+use libc::c_ulong;
 
 
 /// A trait for types that can store media.
@@ -14,7 +17,7 @@ pub trait Media {
 
 /// Media stored as a local file.
 pub struct FileMedia {
-    file: *mut ::gphoto2::CameraFile,
+    pub file: *mut ::gphoto2::CameraFile,
 }
 
 impl Drop for FileMedia {
@@ -61,6 +64,28 @@ impl FileMedia {
 
                 Err(::error::from_libgphoto2(err))
             }
+        }
+    }
+
+    pub fn create_mem() -> ::Result<Self> {
+        let mut ptr = unsafe { mem::uninitialized() };
+
+        match unsafe { ::gphoto2::gp_file_new(&mut ptr) } {
+            ::gphoto2::GP_OK => Ok(FileMedia { file: ptr }),
+            err => Err(::error::from_libgphoto2(err)),
+        }
+    }
+
+    pub fn get_data(&mut self) -> Vec<u8> {
+        let mut ptr = unsafe { mem::uninitialized() };
+        let mut len: c_ulong = 0;
+
+        unsafe {
+            ::gphoto2::gp_file_get_data_and_size(self.file, &mut ptr, &mut len)
+        };
+
+        unsafe { 
+            slice::from_raw_parts(ptr as *const u8, len as usize).to_vec() 
         }
     }
 }

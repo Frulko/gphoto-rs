@@ -1,14 +1,17 @@
 use std::borrow::Cow;
 use std::ffi::CStr;
-use std::mem;
+use std::{mem, slice};
 
-use ::context::Context;
-use ::abilities::Abilities;
-use ::media::Media;
-use ::port::Port;
-use ::storage::Storage;
+use abilities::Abilities;
+use context::Context;
+use libc::{SIGXFSZ, c_void, c_ulong};
+use media::Media;
+use port::Port;
+use storage::Storage;
 
-use ::handle::prelude::*;
+use handle::prelude::*;
+
+use crate::FileMedia;
 
 /// A structure representing a camera connected to the system.
 pub struct Camera {
@@ -32,7 +35,10 @@ impl Camera {
 
         let camera = Camera { camera: ptr };
 
-        try_unsafe!(::gphoto2::gp_camera_init(camera.camera, context.as_mut_ptr()));
+        try_unsafe!(::gphoto2::gp_camera_init(
+            camera.camera,
+            context.as_mut_ptr()
+        ));
 
         Ok(camera)
     }
@@ -51,8 +57,26 @@ impl Camera {
         Ok(CameraFile { inner: file_path })
     }
 
+    pub fn capture_preview(&mut self, context: &mut Context) -> ::Result<Vec<u8>> {
+
+        let mut file = FileMedia::create_mem()?;
+
+        try_unsafe! {
+            ::gphoto2::gp_camera_capture_preview(self.camera,
+                                         file.file,
+                                         context.as_mut_ptr())
+        };
+
+        Ok(file.get_data())
+    }
+
     /// Downloads a file from the camera.
-    pub fn download<T: Media>(&mut self, context: &mut Context, source: &CameraFile, destination: &mut T) -> ::Result<()> {
+    pub fn download<T: Media>(
+        &mut self,
+        context: &mut Context,
+        source: &CameraFile,
+        destination: &mut T,
+    ) -> ::Result<()> {
         try_unsafe! {
             ::gphoto2::gp_camera_file_get(self.camera,
                                           source.inner.folder.as_ptr(),
@@ -70,7 +94,10 @@ impl Camera {
         let mut ptr = unsafe { mem::uninitialized() };
 
         unsafe {
-            assert_eq!(::gphoto2::GP_OK, ::gphoto2::gp_camera_get_port_info(self.camera, &mut ptr));
+            assert_eq!(
+                ::gphoto2::GP_OK,
+                ::gphoto2::gp_camera_get_port_info(self.camera, &mut ptr)
+            );
         }
 
         ::port::from_libgphoto2(self, ptr)
@@ -81,7 +108,10 @@ impl Camera {
         let mut abilities = unsafe { mem::uninitialized() };
 
         unsafe {
-            assert_eq!(::gphoto2::GP_OK, ::gphoto2::gp_camera_get_abilities(self.camera, &mut abilities));
+            assert_eq!(
+                ::gphoto2::GP_OK,
+                ::gphoto2::gp_camera_get_abilities(self.camera, &mut abilities)
+            );
         }
 
         ::abilities::from_libgphoto2(abilities)
@@ -121,7 +151,11 @@ impl Camera {
     pub fn summary(&mut self, context: &mut Context) -> ::Result<String> {
         let mut summary = unsafe { mem::uninitialized() };
 
-        try_unsafe!(::gphoto2::gp_camera_get_summary(self.camera, &mut summary, context.as_mut_ptr()));
+        try_unsafe!(::gphoto2::gp_camera_get_summary(
+            self.camera,
+            &mut summary,
+            context.as_mut_ptr()
+        ));
 
         util::camera_text_to_string(summary)
     }
@@ -139,7 +173,11 @@ impl Camera {
     pub fn manual(&mut self, context: &mut Context) -> ::Result<String> {
         let mut manual = unsafe { mem::uninitialized() };
 
-        try_unsafe!(::gphoto2::gp_camera_get_manual(self.camera, &mut manual, context.as_mut_ptr()));
+        try_unsafe!(::gphoto2::gp_camera_get_manual(
+            self.camera,
+            &mut manual,
+            context.as_mut_ptr()
+        ));
 
         util::camera_text_to_string(manual)
     }
@@ -157,12 +195,15 @@ impl Camera {
     pub fn about_driver(&mut self, context: &mut Context) -> ::Result<String> {
         let mut about = unsafe { mem::uninitialized() };
 
-        try_unsafe!(::gphoto2::gp_camera_get_about(self.camera, &mut about, context.as_mut_ptr()));
+        try_unsafe!(::gphoto2::gp_camera_get_about(
+            self.camera,
+            &mut about,
+            context.as_mut_ptr()
+        ));
 
         util::camera_text_to_string(about)
     }
 }
-
 
 /// A file stored on a camera's storage.
 pub struct CameraFile {
@@ -172,16 +213,12 @@ pub struct CameraFile {
 impl CameraFile {
     /// Returns the directory that the file is stored in.
     pub fn directory(&self) -> Cow<str> {
-        unsafe {
-            String::from_utf8_lossy(CStr::from_ptr(self.inner.folder.as_ptr()).to_bytes())
-        }
+        unsafe { String::from_utf8_lossy(CStr::from_ptr(self.inner.folder.as_ptr()).to_bytes()) }
     }
 
     /// Returns the name of the file without the directory.
     pub fn basename(&self) -> Cow<str> {
-        unsafe {
-            String::from_utf8_lossy(CStr::from_ptr(self.inner.name.as_ptr()).to_bytes())
-        }
+        unsafe { String::from_utf8_lossy(CStr::from_ptr(self.inner.name.as_ptr()).to_bytes()) }
     }
 }
 
@@ -189,16 +226,17 @@ mod util {
     use std::ffi::CStr;
 
     pub fn camera_text_to_string(mut camera_text: ::gphoto2::CameraText) -> ::Result<String> {
-        let length = unsafe {
-            CStr::from_ptr(camera_text.text.as_ptr()).to_bytes().len()
-        };
+        let length = unsafe { CStr::from_ptr(camera_text.text.as_ptr()).to_bytes().len() };
 
         let vec = unsafe {
-            Vec::<u8>::from_raw_parts(camera_text.text.as_mut_ptr() as *mut u8, length, camera_text.text.len())
+            Vec::<u8>::from_raw_parts(
+                camera_text.text.as_mut_ptr() as *mut u8,
+                length,
+                camera_text.text.len(),
+            )
         };
 
-        String::from_utf8(vec).map_err(|_| {
-            ::error::from_libgphoto2(::gphoto2::GP_ERROR_CORRUPTED_DATA)
-        })
+        String::from_utf8(vec)
+            .map_err(|_| ::error::from_libgphoto2(::gphoto2::GP_ERROR_CORRUPTED_DATA))
     }
 }
